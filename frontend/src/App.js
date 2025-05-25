@@ -1,15 +1,23 @@
-// File: /root/missing-tones-app/frontend/src/App.js
-
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useRef } from 'react';
 import Meyda from 'meyda';
 import ReferencePlayer from './ReferencePlayer';
 import './App.css';
 
+import {
+  BarChart,
+  Bar,
+  Cell,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer
+} from 'recharts';
+
 // Configuration constants
 const RECORD_DURATION_MS = 20_000;
-const WAVEFORM_FFT_SIZE = 2048;
-const SPECTRUM_FFT_SIZE = 4096;
-const COUNTDOWN_INTERVAL = 1000; // 1 second
+const WAVEFORM_FFT_SIZE    = 2048;
+const SPECTRUM_FFT_SIZE    = 4096;
+const COUNTDOWN_INTERVAL   = 1000; // 1 second
 
 const TARGET_FREQUENCIES = [
   261.63, 277.18, 293.66, 311.13,
@@ -19,28 +27,30 @@ const TARGET_FREQUENCIES = [
 const THRESHOLD_DB = -40; // relative to peak
 
 function App() {
-  const [stage, setStage] = useState('idle');
-  const [missing, setMissing] = useState([]);
-  const [secondsLeft, setSecondsLeft] = useState(0);
-  const intervalRef = useRef(null);
-  const audioCtxRef = useRef(null);
-  const analyzerRef = useRef(null);
-  const gainRef = useRef(0);
-  const maxMag = useRef({});
-  const canvasRef = useRef(null);
+  const [stage, setStage]         = useState('idle');
+  const [missing, setMissing]     = useState([]);
+  const [secondsLeft, setSeconds] = useState(0);
+  const [currentMags, setMags]    = useState(
+    TARGET_FREQUENCIES.map(() => 0)
+  );
+
+  const intervalRef  = useRef(null);
+  const audioCtxRef  = useRef(null);
+  const analyzerRef  = useRef(null);
+  const gainRef      = useRef(0);
+  const maxMag       = useRef({});
+  const canvasRef    = useRef(null);
   const animationRef = useRef(null);
 
-  // Reset state
   const reset = () => {
-    maxMag.current = {};
-    TARGET_FREQUENCIES.forEach(f => { maxMag.current[f] = 0; });
+    TARGET_FREQUENCIES.forEach(f => (maxMag.current[f] = 0));
     gainRef.current = 0;
     setMissing([]);
-    setSecondsLeft(0);
+    setSeconds(0);
+    setMags(TARGET_FREQUENCIES.map(() => 0));
     if (intervalRef.current) clearInterval(intervalRef.current);
   };
 
-  // Draw waveform on canvas
   const drawWaveform = analyser => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -49,30 +59,30 @@ function App() {
     const data = new Uint8Array(bufferLength);
     analyser.getByteTimeDomainData(data);
 
-    ctx.fillStyle = '#222';
+    ctx.fillStyle   = '#222';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.lineWidth = 2;
+    ctx.lineWidth   = 2;
     ctx.strokeStyle = '#0f0';
     ctx.beginPath();
 
     const slice = canvas.width / bufferLength;
     let x = 0;
-    for (let i = 0; i < bufferLength; i++) {
-      const v = data[i] / 128 - 1;
-      const y = (v * canvas.height / 2) + canvas.height / 2;
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
+    data.forEach((vByte, i) => {
+      const v = vByte / 128 - 1;
+      const y = v * (canvas.height / 2) + (canvas.height / 2);
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
       x += slice;
-    }
+    });
     ctx.stroke();
-    animationRef.current = requestAnimationFrame(() => drawWaveform(analyser));
+    animationRef.current = requestAnimationFrame(() =>
+      drawWaveform(analyser)
+    );
   };
 
-  // Start 20s recording and analysis
   const startRecording = async () => {
     reset();
     setStage('recording');
-    setSecondsLeft(RECORD_DURATION_MS / COUNTDOWN_INTERVAL);
+    setSeconds(RECORD_DURATION_MS / COUNTDOWN_INTERVAL);
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -81,15 +91,15 @@ function App() {
       audioCtxRef.current = audioCtx;
       const source = audioCtx.createMediaStreamSource(stream);
 
-      // Waveform analyser
+      // Draw waveform
       const analyserNode = audioCtx.createAnalyser();
       analyserNode.fftSize = WAVEFORM_FFT_SIZE;
       source.connect(analyserNode);
       drawWaveform(analyserNode);
 
-      // Countdown timer
+      // Countdown
       intervalRef.current = setInterval(() => {
-        setSecondsLeft(prev => {
+        setSeconds(prev => {
           if (prev <= 1) {
             clearInterval(intervalRef.current);
             return 0;
@@ -98,7 +108,7 @@ function App() {
         });
       }, COUNTDOWN_INTERVAL);
 
-      // Spectrum analyser via Meyda
+      // Meyda spectrum analyzer
       analyzerRef.current = Meyda.createMeydaAnalyzer({
         audioContext: audioCtx,
         source,
@@ -106,36 +116,36 @@ function App() {
         featureExtractors: ['amplitudeSpectrum'],
         callback: features => {
           const spec = features.amplitudeSpectrum;
-          const sr = audioCtx.sampleRate;
           const peak = Math.max(...spec);
           gainRef.current = peak;
 
-          TARGET_FREQUENCIES.forEach(freq => {
-            const bin = Math.round(freq * SPECTRUM_FFT_SIZE / sr);
+          // Update max & current mags
+          const newMags = TARGET_FREQUENCIES.map(freq => {
+            const bin = Math.round(freq * SPECTRUM_FFT_SIZE / audioCtx.sampleRate);
             const mag = spec[bin] || 0;
             if (mag > maxMag.current[freq]) maxMag.current[freq] = mag;
+            return peak > 0 ? mag / peak : 0;
           });
+          setMags(newMags);
         }
       });
       analyzerRef.current.start();
 
-      // Stop recording after 20s
+      // Stop after 20s
       setTimeout(() => {
         analyzerRef.current.stop();
         audioCtx.close();
         cancelAnimationFrame(animationRef.current);
-        if (intervalRef.current) clearInterval(intervalRef.current);
+        clearInterval(intervalRef.current);
 
-        // Compute missing tones
         const missingList = TARGET_FREQUENCIES.filter(freq => {
           const mag = maxMag.current[freq];
-          const db = 20 * Math.log10(mag / gainRef.current);
+          const db  = 20 * Math.log10(mag / gainRef.current);
           return db < THRESHOLD_DB;
         });
         setMissing(missingList);
         setStage('done');
       }, RECORD_DURATION_MS);
-
     } catch (err) {
       console.error('Recording error:', err);
       reset();
@@ -148,7 +158,7 @@ function App() {
       <h1>Read Aloud</h1>
       <p>Please read the following passage:</p>
       <blockquote className="passage">
-        “The quick brown fox jumps over the lazy dog.”<br />
+        “The quick brown fox jumps over the lazy dog.”<br/>
         This sentence contains every letter of the alphabet.
       </blockquote>
 
@@ -163,12 +173,37 @@ function App() {
       </button>
 
       {stage === 'recording' && (
-        <canvas
-          ref={canvasRef}
-          width={600}
-          height={100}
-          style={{ border: '1px solid #444' }}
-        />
+        <>
+          <canvas
+            ref={canvasRef}
+            width={600}
+            height={100}
+            style={{ border: '1px solid #444' }}
+          />
+          <div style={{ width: '100%', height: 200, marginTop: '1rem' }}>
+            <ResponsiveContainer>
+              <BarChart
+                data={TARGET_FREQUENCIES.map((f, i) => ({
+                  freq: f.toFixed(0),
+                  value: currentMags[i]
+                }))}
+                margin={{ top: 20, right: 20, left: 0, bottom: 5 }}
+              >
+                <XAxis dataKey="freq" label={{ value: 'Hz', position: 'insideBottom', offset: -5 }} />
+                <YAxis domain={[0, 1]} hide />
+                <Tooltip formatter={val => `${Math.round(val * 100)}%`} />
+                <Bar dataKey="value" isAnimationActive={false}>
+                  {TARGET_FREQUENCIES.map((_, i) => (
+                    <Cell
+                      key={`cell-${i}`}
+                      fill={currentMags[i] * 100 > Math.abs(THRESHOLD_DB) ? '#4caf50' : '#888'}
+                    />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </>
       )}
 
       {stage === 'done' && (
