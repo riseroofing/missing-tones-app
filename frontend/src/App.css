@@ -1,0 +1,55 @@
+:root {
+  --bg-color: #111;
+  --text-color: #eee;
+  --accent-color: #f66;
+  --passage-border: #555;
+  --passage-text: #ccc;
+  --sp-1: 0.5rem;
+  --sp-2: 1rem;
+  --sp-3: 2rem;
+}
+
+.App {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: var(--sp-3);
+  font-family: sans-serif;
+  color: var(--text-color);
+  background: var(--bg-color);
+}
+
+.start-btn {
+  padding: var(--sp-1) var(--sp-2);
+  font-size: 1rem;
+  transition: background-color 0.2s ease, transform 0.1s ease;
+}
+.start-btn:hover {
+  background-color: #222;
+}
+.start-btn:active {
+  transform: scale(0.98);
+}
+.start-btn:focus {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+.passage {
+  border-left: 4px solid var(--passage-border);
+  padding-left: var(--sp-2);
+  color: var(--passage-text);
+  font-size: 1.125rem;
+  line-height: 1.6;
+}
+
+.missing {
+  color: var(--accent-color);
+  font-weight: bold;
+  margin-left: var(--sp-1);
+}
+
+canvas {
+  display: block;
+  margin: var(--sp-2) 0;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+}
