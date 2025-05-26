@@ -11,9 +11,9 @@ const RECORD_DURATION_MS = 5000;
 const WAVEFORM_FFT_SIZE  = 2048;
 const SPECTRUM_FFT_SIZE  = 4096;
 const COUNTDOWN_INTERVAL = 1000; // 1 second
-const THRESHOLD_DB       = -10;  // stricter detection threshold (dB)
-
-const NOISE_FLOOR = 0.02; // RMS below this is considered silence
+const THRESHOLD_DB       = 0;    // Only strong tones count
+const NOISE_FLOOR        = 0.05; // RMS below this is silence
+const MIN_PEAK           = 0.05; // Ignore frames with weak energy
 
 const TARGET_FREQUENCIES = [
   261.63, 277.18, 293.66, 311.13,
@@ -21,7 +21,6 @@ const TARGET_FREQUENCIES = [
   415.30, 440.00, 466.16, 493.88
 ];
 
-const MIN_PEAK = 0.01; // Minimum peak magnitude to consider as valid voice input
 
 function App() {
   const [stage, setStage]         = useState('idle');
@@ -146,12 +145,12 @@ function App() {
         featureExtractors:['amplitudeSpectrum', 'rms'],
         callback:features=>{
           const { amplitudeSpectrum: spec, rms } = features;
-          // Gate out frames below noise floor
-          if (rms < NOISE_FLOOR) {
+          const peak = Math.max(...spec);
+          // Gate out frames below noise floor or weak peak
+          if (rms < NOISE_FLOOR || peak < MIN_PEAK) {
             setMags(TARGET_FREQUENCIES.map(() => 0));
             return;
           }
-          const peak = Math.max(...spec);
           gainRef.current = peak;
           const mags = TARGET_FREQUENCIES.map(freq=>{
             const bin = Math.round(freq*SPECTRUM_FFT_SIZE/audioCtx.sampleRate);
@@ -201,7 +200,9 @@ function App() {
     <div className="App">
       <h1>Read Aloud</h1>
       {stage==='idle' && (
-        <button onClick={startRecording}>Start 5s Recording</button>
+        <button onClick={startRecording}>
+          Start 5s Recording (be loud and clear)
+        </button>
       )}
       {error && <div className="error" style={{color:'red'}}>{error}</div>}
 
