@@ -11,7 +11,9 @@ const RECORD_DURATION_MS = 20000;
 const WAVEFORM_FFT_SIZE  = 2048;
 const SPECTRUM_FFT_SIZE  = 4096;
 const COUNTDOWN_INTERVAL = 1000; // 1 second
-const THRESHOLD_DB       = -40;  // dB threshold for missing
+const THRESHOLD_DB       = -10;  // stricter detection threshold (dB)
+
+const NOISE_FLOOR = 0.02; // RMS below this is considered silence
 
 const TARGET_FREQUENCIES = [
   261.63, 277.18, 293.66, 311.13,
@@ -139,9 +141,14 @@ function App() {
         audioContext:audioCtx,
         source:comp,
         bufferSize:SPECTRUM_FFT_SIZE,
-        featureExtractors:['amplitudeSpectrum'],
+        featureExtractors:['amplitudeSpectrum', 'rms'],
         callback:features=>{
-          const spec = features.amplitudeSpectrum;
+          const { amplitudeSpectrum: spec, rms } = features;
+          // Gate out frames below noise floor
+          if (rms < NOISE_FLOOR) {
+            setMags(TARGET_FREQUENCIES.map(() => 0));
+            return;
+          }
           const peak = Math.max(...spec);
           gainRef.current = peak;
           const mags = TARGET_FREQUENCIES.map(freq=>{
