@@ -1,4 +1,3 @@
-// File: /root/missing-tones-app/frontend/src/App.js
 import React, { useState, useRef } from 'react';
 import Meyda from 'meyda';
 import ReferencePlayer from './ReferencePlayer';
@@ -8,41 +7,43 @@ import {
 } from 'recharts';
 
 // Configuration constants
-const RECORD_DURATION_MS = 20000;
-const WAVEFORM_FFT_SIZE = 2048;
-const SPECTRUM_FFT_SIZE = 4096;
-const COUNTDOWN_INTERVAL = 1000; // 1 second
+const RECORD_DURATION_MS = 20_000;
+const WAVEFORM_FFT_SIZE  = 2048;
+const SPECTRUM_FFT_SIZE  = 4096;
+const COUNTDOWN_INTERVAL = 1000;  // 1 second
+const NOISE_RMS_THRESHOLD = 0.02; // gate threshold
 
 const TARGET_FREQUENCIES = [
   261.63, 277.18, 293.66, 311.13,
-  329.63, 349.23, 369.99, 392.0,
-  415.3, 440.0, 466.16, 493.88
+  329.63, 349.23, 369.99, 392.00,
+  415.30, 440.00, 466.16, 493.88
 ];
 const THRESHOLD_DB = -40; // relative to peak
 
 function App() {
-  const [stage, setStage] = useState('idle');
-  const [missing, setMissing] = useState([]);
-  const [secondsLeft, setSecondsLeft] = useState(0);
-  const [currentMags, setCurrentMags] = useState(
+  const [stage, setStage]         = useState('idle');
+  const [missing, setMissing]     = useState([]);
+  const [secondsLeft, setSeconds] = useState(0);
+  const [currentMags, setMags]    = useState(
     TARGET_FREQUENCIES.map(() => 0)
   );
 
   const intervalRef = useRef(null);
   const audioCtxRef = useRef(null);
   const analyzerRef = useRef(null);
-  const gainRef = useRef(0);
-  const maxMag = useRef({});
-  const canvasRef = useRef(null);
-  const animationRef = useRef(null);
+  const gateGainRef = useRef(null);
+  const gainRef     = useRef(0);
+  const maxMag      = useRef({});
+  const canvasRef   = useRef(null);
+  const animationRef= useRef(null);
 
   // Reset state
   const reset = () => {
     TARGET_FREQUENCIES.forEach(f => (maxMag.current[f] = 0));
     gainRef.current = 0;
     setMissing([]);
-    setSecondsLeft(0);
-    setCurrentMags(TARGET_FREQUENCIES.map(() => 0));
+    setSeconds(0);
+    setMags(TARGET_FREQUENCIES.map(() => 0));
     if (intervalRef.current) clearInterval(intervalRef.current);
   };
 
@@ -57,35 +58,34 @@ function App() {
 
     ctx.fillStyle = '#222';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.lineWidth = 2;
+    ctx.lineWidth   = 2;
     ctx.strokeStyle = '#0f0';
     ctx.beginPath();
 
     const sliceWidth = canvas.width / bufferLength;
     let x = 0;
-
     data.forEach((vByte, i) => {
       const v = vByte / 128 - 1;
       const y = v * (canvas.height / 2) + canvas.height / 2;
-      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      i === 0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
       x += sliceWidth;
     });
     ctx.stroke();
     animationRef.current = requestAnimationFrame(() => drawWaveform(analyser));
   };
 
-  // Start recording with noise suppression and bandpass filtering
+  // Start recording with filtering + gate
   const startRecording = async () => {
     reset();
     setStage('recording');
-    setSecondsLeft(RECORD_DURATION_MS / COUNTDOWN_INTERVAL);
+    setSeconds(RECORD_DURATION_MS / COUNTDOWN_INTERVAL);
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           noiseSuppression: true,
           echoCancellation: true,
-          autoGainControl: true
+          autoGainControl:  true
         }
       });
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -93,25 +93,48 @@ function App() {
       audioCtxRef.current = audioCtx;
       const source = audioCtx.createMediaStreamSource(stream);
 
-      // Create filters: highpass (85Hz) then lowpass (8000Hz)
+      // Build filter chain: HPF -> LPF -> Notch -> Compressor -> Gate -> Analyser
       const highpass = audioCtx.createBiquadFilter();
       highpass.type = 'highpass';
       highpass.frequency.value = 85;
+
       const lowpass = audioCtx.createBiquadFilter();
       lowpass.type = 'lowpass';
       lowpass.frequency.value = 8000;
+
+      const notch = audioCtx.createBiquadFilter();
+      notch.type = 'notch';
+      notch.frequency.value = 60;
+      notch.Q = 30;
+
+      const compressor = audioCtx.createDynamicsCompressor();
+      compressor.threshold.value = -50;
+      compressor.knee.value      = 40;
+      compressor.ratio.value     = 12;
+      compressor.attack.value    = 0;
+      compressor.release.value   = 0.25;
+
+      const gateGain = audioCtx.createGain();
+      gateGain.gain.value = 1;  // will be toggled in callback
+      gateGainRef.current = gateGain;
+
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = WAVEFORM_FFT_SIZE;
+
+      // Wire up: source → HPF → LPF → notch → compressor → gate → analyser
       source.connect(highpass);
       highpass.connect(lowpass);
+      lowpass.connect(notch);
+      notch.connect(compressor);
+      compressor.connect(gateGain);
+      gateGain.connect(analyser);
 
-      // Waveform analyser
-      const analyserNode = audioCtx.createAnalyser();
-      analyserNode.fftSize = WAVEFORM_FFT_SIZE;
-      lowpass.connect(analyserNode);
-      drawWaveform(analyserNode);
+      // Start drawing waveform
+      drawWaveform(analyser);
 
       // Countdown timer
       intervalRef.current = setInterval(() => {
-        setSecondsLeft(prev => {
+        setSeconds(prev => {
           if (prev <= 1) {
             clearInterval(intervalRef.current);
             return 0;
@@ -120,23 +143,28 @@ function App() {
         });
       }, COUNTDOWN_INTERVAL);
 
-      // Spectrum analyzer via Meyda
+      // Meyda spectrum + RMS analyzer
       analyzerRef.current = Meyda.createMeydaAnalyzer({
         audioContext: audioCtx,
-        source: lowpass,
+        source: gateGain,  // analyze post-gate
         bufferSize: SPECTRUM_FFT_SIZE,
-        featureExtractors: ['amplitudeSpectrum'],
+        featureExtractors: ['amplitudeSpectrum', 'rms'],
         callback: features => {
-          const spec = features.amplitudeSpectrum;
+          const { amplitudeSpectrum: spec, rms } = features;
           const peak = Math.max(...spec);
           gainRef.current = peak;
+
+          // Gate on RMS
+          gateGain.gain.value = rms > NOISE_RMS_THRESHOLD ? 1 : 0;
+
+          // Compute normalized magnitudes
           const newMags = TARGET_FREQUENCIES.map(freq => {
             const bin = Math.round(freq * SPECTRUM_FFT_SIZE / audioCtx.sampleRate);
             const mag = spec[bin] || 0;
-            if (mag > maxMag.current[freq]) maxMag.current[freq] = mag;
+            if (mag > (maxMag.current[freq]||0)) maxMag.current[freq] = mag;
             return peak > 0 ? mag / peak : 0;
           });
-          setCurrentMags(newMags);
+          setMags(newMags);
         }
       });
       analyzerRef.current.start();
@@ -150,7 +178,7 @@ function App() {
 
         const missingList = TARGET_FREQUENCIES.filter(freq => {
           const mag = maxMag.current[freq];
-          const db = 20 * Math.log10(mag / gainRef.current);
+          const db  = 20 * Math.log10(mag / gainRef.current);
           return db < THRESHOLD_DB;
         });
         setMissing(missingList);
@@ -169,21 +197,21 @@ function App() {
       <h1>Read Aloud</h1>
       <p>Please read the following passage:</p>
       <blockquote className="passage">
-        “The quick brown fox jumps over the lazy dog.”<br />
+        “The quick brown fox jumps over the lazy dog.”<br/>
         This sentence contains every letter of the alphabet.
       </blockquote>
 
       <button
         onClick={startRecording}
         className="start-btn"
-        disabled={stage === 'recording'}
+        disabled={stage==='recording'}
       >
-        {stage === 'recording'
+        {stage==='recording'
           ? `Recording (${secondsLeft}s)`
           : 'Start 20s Recording'}
       </button>
 
-      {stage === 'recording' && (
+      {stage==='recording' && (
         <>
           <canvas
             ref={canvasRef}
@@ -191,20 +219,24 @@ function App() {
             height={100}
             style={{ border: '1px solid #444' }}
           />
-          <div style={{ width: '100%', height: 200, marginTop: '1rem' }}>
+          <div style={{ width:'100%', height:200, marginTop:'1rem' }}>
             <ResponsiveContainer>
               <BarChart
-                data={TARGET_FREQUENCIES.map((f, i) => ({ freq: f.toFixed(0), value: currentMags[i] }))}
-                margin={{ top: 20, right: 20, left: 0, bottom: 5 }}
+                data={TARGET_FREQUENCIES.map((f,i) => ({
+                  freq: f.toFixed(0), value: currentMags[i]
+                }))}
+                margin={{ top:20, right:20, left:0, bottom:5 }}
               >
-                <XAxis dataKey="freq" label={{ value: 'Hz', position: 'insideBottom', offset: -5 }} />
-                <YAxis domain={[0, 1]} hide />
-                <Tooltip formatter={val => `${Math.round(val * 100)}%`} />
+                <XAxis dataKey="freq"
+                  label={{ value:'Hz', position:'insideBottom', offset:-5 }}
+                />
+                <YAxis domain={[0,1]} hide/>
+                <Tooltip formatter={v => `${Math.round(v*100)}%`} />
                 <Bar dataKey="value" isAnimationActive={false}>
-                  {TARGET_FREQUENCIES.map((_, i) => (
-                    <Cell
-                      key={`cell-${i}`} 
-                      fill={currentMags[i] * 100 > Math.abs(THRESHOLD_DB) ? '#4caf50' : '#888'}
+                  {TARGET_FREQUENCIES.map((_,i)=>(
+                    <Cell key={i}
+                      fill={currentMags[i]*100 > Math.abs(THRESHOLD_DB)
+                        ? '#4caf50' : '#888'}
                     />
                   ))}
                 </Bar>
@@ -214,23 +246,22 @@ function App() {
         </>
       )}
 
-      {stage === 'done' && (
+      {stage==='done' && (
         <>
           <h2>Missing Tones</h2>
-          {missing.length === 0 ? (
-            <p>Great job—you hit all target frequencies!</p>
-          ) : (
-            <ul>
-              {missing.map(freq => (
-                <li key={freq}>
-                  {freq.toFixed(2)} Hz is missing
-                  <ReferencePlayer freq={freq} />
-                </li>
-              ))}
-            </ul>
-          )}
+          {missing.length===0
+            ? <p>Great job—you hit all target frequencies!</p>
+            : <ul>
+                {missing.map(f => (
+                  <li key={f}>
+                    {f.toFixed(2)} Hz is missing
+                    <ReferencePlayer freq={f}/>
+                  </li>
+                ))}
+              </ul>
+          }
           <button
-            onClick={() => setStage('idle')}
+            onClick={()=>setStage('idle')}
             className="start-btn"
           >
             Record Again
