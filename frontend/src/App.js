@@ -108,7 +108,7 @@ function App() {
       const notch = audioCtx.createBiquadFilter();
       notch.type = 'notch';
       notch.frequency.value = 60;
-      notch.Q = 30;
+      notch.Q.value = 30;
 
       const compressor = audioCtx.createDynamicsCompressor();
       compressor.threshold.value = -50;
