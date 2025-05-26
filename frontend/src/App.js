@@ -11,7 +11,6 @@ const RECORD_DURATION_MS = 20_000;
 const WAVEFORM_FFT_SIZE  = 2048;
 const SPECTRUM_FFT_SIZE  = 4096;
 const COUNTDOWN_INTERVAL = 1000;  // 1 second
-const NOISE_RMS_THRESHOLD = 0.02; // gate threshold
 
 const TARGET_FREQUENCIES = [
   261.63, 277.18, 293.66, 311.13,
@@ -32,7 +31,7 @@ function App() {
   const intervalRef = useRef(null);
   const audioCtxRef = useRef(null);
   const analyzerRef = useRef(null);
-  const gateGainRef = useRef(null);
+  // const gateGainRef = useRef(null);
   const gainRef     = useRef(0);
   const maxMag      = useRef({});
   const canvasRef   = useRef(null);
@@ -76,7 +75,7 @@ function App() {
     animationRef.current = requestAnimationFrame(() => drawWaveform(analyser));
   };
 
-  // Start recording with filtering + gate
+  // Start recording with filtering only (no gate)
   const startRecording = async () => {
     try {
       console.log('startRecording called');
@@ -88,7 +87,7 @@ function App() {
         audio: {
           noiseSuppression: true,
           echoCancellation: true,
-          autoGainControl:  true
+          autoGainControl: true
         }
       });
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -96,7 +95,7 @@ function App() {
       audioCtxRef.current = audioCtx;
       const source = audioCtx.createMediaStreamSource(stream);
 
-      // Build filter chain: HPF -> LPF -> Notch -> Compressor -> Gate -> Analyser
+      // Build filter chain: HPF -> LPF -> Notch -> Compressor -> Analyser
       const highpass = audioCtx.createBiquadFilter();
       highpass.type = 'highpass';
       highpass.frequency.value = 85;
@@ -112,25 +111,20 @@ function App() {
 
       const compressor = audioCtx.createDynamicsCompressor();
       compressor.threshold.value = -50;
-      compressor.knee.value      = 40;
-      compressor.ratio.value     = 12;
-      compressor.attack.value    = 0;
-      compressor.release.value   = 0.25;
-
-      const gateGain = audioCtx.createGain();
-      gateGain.gain.value = 1;  // will be toggled in callback
-      gateGainRef.current = gateGain;
+      compressor.knee.value = 40;
+      compressor.ratio.value = 12;
+      compressor.attack.value = 0;
+      compressor.release.value = 0.25;
 
       const analyser = audioCtx.createAnalyser();
       analyser.fftSize = WAVEFORM_FFT_SIZE;
 
-      // Wire up: source → HPF → LPF → notch → compressor → gate → analyser
+      // Wire up: source → HPF → LPF → notch → compressor → analyser
       source.connect(highpass);
       highpass.connect(lowpass);
       lowpass.connect(notch);
       notch.connect(compressor);
-      compressor.connect(gateGain);
-      gateGain.connect(analyser);
+      compressor.connect(analyser);
 
       // Start drawing waveform
       drawWaveform(analyser);
@@ -146,25 +140,24 @@ function App() {
         });
       }, COUNTDOWN_INTERVAL);
 
-      // Meyda spectrum + RMS analyzer
+      // Meyda spectrum analyzer
       analyzerRef.current = Meyda.createMeydaAnalyzer({
         audioContext: audioCtx,
-        source: gateGain,  // analyze post-gate
+        source: compressor, // analyze post-compressor
         bufferSize: SPECTRUM_FFT_SIZE,
-        featureExtractors: ['amplitudeSpectrum', 'rms'],
+        featureExtractors: ['amplitudeSpectrum'],
         callback: features => {
-          const { amplitudeSpectrum: spec, rms } = features;
+          const spec = features.amplitudeSpectrum;
           const peak = Math.max(...spec);
           gainRef.current = peak;
-
-          // Gate on RMS
-          gateGain.gain.value = rms > NOISE_RMS_THRESHOLD ? 1 : 0;
 
           // Compute normalized magnitudes
           const newMags = TARGET_FREQUENCIES.map(freq => {
             const bin = Math.round(freq * SPECTRUM_FFT_SIZE / audioCtx.sampleRate);
             const mag = spec[bin] || 0;
-            if (mag > (maxMag.current[freq]||0)) maxMag.current[freq] = mag;
+            if (mag > (maxMag.current[freq] || 0)) {
+              maxMag.current[freq] = mag;
+            }
             return peak > 0 ? mag / peak : 0;
           });
           setMags(newMags);
@@ -181,7 +174,7 @@ function App() {
 
         const missingList = TARGET_FREQUENCIES.filter(freq => {
           const mag = maxMag.current[freq];
-          const db  = 20 * Math.log10(mag / gainRef.current);
+          const db = 20 * Math.log10(mag / gainRef.current);
           return db < THRESHOLD_DB;
         });
         setMissing(missingList);
