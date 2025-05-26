@@ -7,7 +7,7 @@ import {
 } from 'recharts';
 
 // Configuration
-const RECORD_DURATION_MS = 5000;
+const RECORD_DURATION_MS = 15000;
 const WAVEFORM_FFT_SIZE  = 2048;
 const SPECTRUM_FFT_SIZE  = 4096;
 const COUNTDOWN_INTERVAL = 1000; // 1 second
@@ -219,7 +219,7 @@ function App() {
       </div>
       {stage==='idle' && (
         <button onClick={startRecording}>
-          Start 5s Recording (be loud and clear)
+          Start 15s Recording (be loud and clear)
         </button>
       )}
       {error && <div className="error" style={{color:'red'}}>{error}</div>}
