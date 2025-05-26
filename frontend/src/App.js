@@ -199,6 +199,24 @@ function App() {
   return (
     <div className="App">
       <h1>Read Aloud</h1>
+      <div className="instructions" style={{ background: "#1a1a1a", color: "#eee", padding: "1rem", borderRadius: 6, marginBottom: 16 }}>
+        <strong>Instructions:</strong>
+        <ol style={{ marginTop: 8 }}>
+          <li>Click <b>Start 5s Recording</b> and allow microphone access.</li>
+          <li>
+            One at a time, speak or sing each of these syllables <b>loudly and clearly</b> (hold each for about 1 second):<br />
+            <span style={{ color: '#4caf50', fontWeight: 600 }}>
+              do (“doh”), di (“dee-ee”), re (“ray”), ri (“ree-ee”), mi (“me”), fa (“fah”), fi (“fee-ee”), sol (“sohl”), si (“see-ee”), la (“lah”), li (“lee-ee”), ti (“tee”)
+            </span>
+          </li>
+          <li>
+            The bars below will light up when your voice hits a frequency. After 5 seconds, missing tones will be listed.
+          </li>
+          <li>
+            If you see <span style={{ color: 'red' }}>"No voice detected"</span>, please speak louder and try again.
+          </li>
+        </ol>
+      </div>
       {stage==='idle' && (
         <button onClick={startRecording}>
           Start 5s Recording (be loud and clear)
