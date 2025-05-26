@@ -21,6 +21,8 @@ const TARGET_FREQUENCIES = [
   415.30, 440.00, 466.16, 493.88
 ];
 
+const MIN_PEAK = 0.01; // Minimum peak magnitude to consider as valid voice input
+
 function App() {
   const [stage, setStage]         = useState('idle');
   const [secondsLeft, setSeconds] = useState(0);
@@ -167,6 +169,14 @@ function App() {
 
       // Stop
       setTimeout(()=>{
+          // Check for any voice input
+          if (gainRef.current < MIN_PEAK) {
+            setError('No voice detected. Please speak louder.');
+            setStage('idle');
+            // Stop tracks and cleanup
+            stream.getTracks().forEach(t => t.stop());
+            return;
+          }
         analyzerRef.current.stop();
         audioCtx.close();
         cancelAnimationFrame(animationRef.current);
@@ -218,12 +228,24 @@ function App() {
 
       {stage==='done' && (
         <>
-          <h2>Missing Tones</h2>
-          {missing.length===0
-            ? <p>All tones detected!</p>
-            : <ul>{missing.map(f=><li key={f}>{f.toFixed(2)} Hz missing <ReferencePlayer freq={f}/></li>)}</ul>
-          }
-          <button onClick={()=>setStage('idle')}>Reset</button>
+          {error ? (
+            <div className="error" style={{ color: 'red' }}>{error}</div>
+          ) : (
+            <>
+              <h2>Missing Tones</h2>
+              {missing.length===0
+                ? <p>All tones detected!</p>
+                : <ul>
+                    {missing.map(f => (
+                      <li key={f}>{f.toFixed(2)} Hz missing <ReferencePlayer freq={f} /></li>
+                    ))}
+                  </ul>
+              }
+            </>
+          )}
+          <button onClick={() => { reset(); setStage('idle'); }} className="start-btn">
+            Reset
+          </button>
         </>
       )}
     </div>
