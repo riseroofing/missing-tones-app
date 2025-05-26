@@ -24,7 +24,6 @@ function App() {
   const [secondsLeft, setSeconds] = useState(0);
   const [currentMags, setMags]    = useState(TARGET_FREQUENCIES.map(() => 0));
   const [missing, setMissing]     = useState([]);
-  const [noiseProfile, setNoise]  = useState(null);
   const [error, setError]         = useState(null);
 
   const intervalRef   = useRef(null);
@@ -34,6 +33,7 @@ function App() {
   const gainRef       = useRef(0);
   const canvasRef     = useRef(null);
   const animationRef  = useRef(null);
+  const noiseProfileRef = useRef(null);
 
   // Draw waveform helper
   const drawWaveform = analyser => {
@@ -69,49 +69,42 @@ function App() {
     if (intervalRef.current) clearInterval(intervalRef.current);
   };
 
-  // Ambient noise calibration (2s)
-  const calibrateNoise = async () => {
-    setStage('calibrating');
-    reset();
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      const source = audioCtx.createMediaStreamSource(stream);
-      const analyser = audioCtx.createAnalyser();
-      analyser.fftSize = SPECTRUM_FFT_SIZE;
-      source.connect(analyser);
-      // Collect frames
-      const frames = [];
-      const data = new Float32Array(SPECTRUM_FFT_SIZE/2);
-      const start = performance.now();
-      while (performance.now() - start < 2000) {
-        analyser.getFloatFrequencyData(data);
-        frames.push(Array.from(data));
-        await new Promise(r => setTimeout(r, 100));
+  // Internal noise calibration (2s) using amplitudeSpectrum
+  const calibrateNoiseInternal = async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const source = audioCtx.createMediaStreamSource(stream);
+    const frames = [];
+    const analyzer = Meyda.createMeydaAnalyzer({
+      audioContext: audioCtx,
+      source,
+      bufferSize: SPECTRUM_FFT_SIZE,
+      featureExtractors: ['amplitudeSpectrum'],
+      callback: features => {
+        // store a copy of the spectrum frame
+        frames.push(Array.from(features.amplitudeSpectrum));
       }
-      // Average per bin
-      const avg = data.map((_,i)=> {
-        let sum = 0;
-        frames.forEach(f=> sum += f[i]);
-        return sum/frames.length;
-      });
-      setNoise(avg);
-      audioCtx.close();
-      stream.getTracks().forEach(t=>t.stop());
-      setStage('idle');
-    } catch (e) {
-      setError('Noise calibration failed');
-      console.error(e);
-      setStage('idle');
-    }
+    });
+    analyzer.start();
+    // collect for 2 seconds
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    analyzer.stop();
+    // average per bin
+    const avg = frames[0].map((_, i) =>
+      frames.reduce((sum, f) => sum + f[i], 0) / frames.length
+    );
+    // cleanup
+    audioCtx.close();
+    stream.getTracks().forEach(t => t.stop());
+    return avg;
   };
 
   // Start recording with spectral subtraction
   const startRecording = async () => {
     reset();
-    if (!noiseProfile) {
-      await calibrateNoise();
-      if (!noiseProfile) return;
+    if (!noiseProfileRef.current) {
+      // Calibrate ambient noise
+      noiseProfileRef.current = await calibrateNoiseInternal();
     }
     setStage('recording');
     setSeconds(RECORD_DURATION_MS/COUNTDOWN_INTERVAL);
@@ -155,7 +148,7 @@ function App() {
             const bin = Math.round(freq*SPECTRUM_FFT_SIZE/audioCtx.sampleRate);
             // Spectral subtraction
             const raw = spec[bin]||0;
-            const noiseVal = noiseProfile[bin] || -100;
+            const noiseVal = (noiseProfileRef.current && noiseProfileRef.current[bin]) || 0;
             const cleaned = Math.max(raw - noiseVal, 0);
             if(cleaned> (maxMag.current[freq]||0)) maxMag.current[freq]=cleaned;
             return peak>0 ? cleaned/peak : 0;
@@ -190,10 +183,7 @@ function App() {
   return (
     <div className="App">
       <h1>Read Aloud</h1>
-      {!noiseProfile && stage==='idle' && (
-        <button onClick={calibrateNoise}>Calibrate Noise Profile</button>
-      )}
-      {noiseProfile && stage==='idle' && (
+      {stage==='idle' && (
         <button onClick={startRecording}>Start 20s Recording</button>
       )}
       {error && <div className="error" style={{color:'red'}}>{error}</div>}
