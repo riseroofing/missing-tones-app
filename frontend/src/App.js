@@ -27,6 +27,7 @@ function App() {
   const [currentMags, setMags]    = useState(
     TARGET_FREQUENCIES.map(() => 0)
   );
+  const [error, setError] = useState(null);
 
   const intervalRef = useRef(null);
   const audioCtxRef = useRef(null);
@@ -39,6 +40,7 @@ function App() {
 
   // Reset state
   const reset = () => {
+    setError(null);
     TARGET_FREQUENCIES.forEach(f => (maxMag.current[f] = 0));
     gainRef.current = 0;
     setMissing([]);
@@ -76,11 +78,12 @@ function App() {
 
   // Start recording with filtering + gate
   const startRecording = async () => {
-    reset();
-    setStage('recording');
-    setSeconds(RECORD_DURATION_MS / COUNTDOWN_INTERVAL);
-
     try {
+      console.log('startRecording called');
+      reset();
+      setStage('recording');
+      setSeconds(RECORD_DURATION_MS / COUNTDOWN_INTERVAL);
+
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           noiseSuppression: true,
@@ -187,6 +190,7 @@ function App() {
 
     } catch (err) {
       console.error('Recording error:', err);
+      setError(err.message || 'Audio capture failed');
       reset();
       setStage('idle');
     }
@@ -210,6 +214,12 @@ function App() {
           ? `Recording (${secondsLeft}s)`
           : 'Start 20s Recording'}
       </button>
+
+      {error && (
+        <div className="error-message" style={{ color: 'red', marginTop: 8 }}>
+          Error: {error}
+        </div>
+      )}
 
       {stage==='recording' && (
         <>
